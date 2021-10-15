@@ -1,0 +1,8 @@
+http_post:
+  host: "http://localhost"
+  path: "/"
+  data: ""
+rserve:
+  host: "localhost"
+  port: 6346
+  data: "print('hi')"
