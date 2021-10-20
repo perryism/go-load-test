@@ -110,7 +110,6 @@ func (p *PyServe) post(subpath string, data string) error {
 	u, err := url.Parse(p.host)
 	u.Path = path.Join(u.Path, subpath)
 	r := strings.NewReader(data)
-	fmt.Println(u.String(), data)
 	resp, err := http.Post(u.String(), "application/x-www-form-urlencoded", r)
 
 	if err != nil {
@@ -181,17 +180,20 @@ func NewConfig(filepath string) config {
 
 	for k, v := range data {
 		value := v.(map[string]interface{})
-		if k == "http_post" {
-			pyserve := PyServe{host: value["host"].(string)}
-			conf.samplers = append(conf.samplers, Sampler{name: k.(string), perform: func() error {
-				path := value["path"].(string)
-				return pyserve.post(path, value["data"].(string))
-			}})
-		} else if k == "rserve" {
-			rserve := NewRServe(value["host"].(string), int64(value["port"].(int)))
-			conf.samplers = append(conf.samplers, Sampler{name: k.(string), perform: func() error {
-				return rserve.perform(value["data"].(string))
-			}})
+		for kk, vv := range value {
+			c := vv.(map[string]interface{})
+			if kk == "http_post" {
+				pyserve := PyServe{host: c["host"].(string)}
+				conf.samplers = append(conf.samplers, Sampler{name: k.(string), perform: func() error {
+					path := c["path"].(string)
+					return pyserve.post(path, c["data"].(string))
+				}})
+			} else if kk == "rserve" {
+				rserve := NewRServe(c["host"].(string), int64(c["port"].(int)))
+				conf.samplers = append(conf.samplers, Sampler{name: k.(string), perform: func() error {
+					return rserve.perform(c["data"].(string))
+				}})
+			}
 		}
 	}
 	return conf
@@ -204,7 +206,7 @@ func main() {
 	conf := NewConfig(*configpath)
 
 	for _, sampler := range conf.samplers {
-		fmt.Print(sampler.name)
+		fmt.Println(sampler.name)
 		loadTest(sampler, *freq)
 	}
 }
