@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/senseyeio/roger"
@@ -17,7 +18,7 @@ import (
 )
 
 type Listener interface {
-	Observe(Sampler)
+	Observe(Sampler, *sync.Mutex)
 	Exit()
 }
 
@@ -29,8 +30,9 @@ type Sampler struct {
 type Perform func() error
 
 type ThreadGroup struct {
-	sampler Sampler
-	freq    int
+	sampler        Sampler
+	freq           int
+	num_of_threads int
 }
 
 type Timer struct {
@@ -62,10 +64,12 @@ type StandoutListener struct {
 	Report
 }
 
-func (sl *StandoutListener) Observe(sampler Sampler) {
+func (sl *StandoutListener) Observe(sampler Sampler, m *sync.Mutex) {
 	timer := Timer{}
 	err := timer.Observe(sampler)
+	m.Lock()
 	sl.Report.AddEntry(timer, err)
+	m.Unlock()
 }
 
 func (sl *StandoutListener) Exit() {
@@ -96,10 +100,27 @@ func (sl *StandoutListener) Exit() {
 }
 
 func (tg *ThreadGroup) Start(listener Listener) {
-	defer listener.Exit()
-	for i := 0; i < tg.freq; i++ {
-		listener.Observe(tg.sampler)
+	c := make(chan Sampler)
+
+	var wg sync.WaitGroup
+	m := &sync.Mutex{}
+	log.Printf("num_of_threads %d", tg.num_of_threads)
+	for i := 0; i < tg.num_of_threads; i++ {
+		go func(c chan Sampler, l Listener, wg *sync.WaitGroup) {
+			for s := range c {
+				listener.Observe(s, m)
+				wg.Done()
+			}
+		}(c, listener, &wg)
 	}
+
+	for i := 0; i < tg.freq; i++ {
+		wg.Add(1)
+		c <- tg.sampler
+	}
+	time.Sleep(5 * time.Second)
+	wg.Wait()
+	listener.Exit()
 }
 
 type PyServe struct {
@@ -108,6 +129,11 @@ type PyServe struct {
 
 func (p *PyServe) post(subpath string, data string) error {
 	u, err := url.Parse(p.host)
+
+	if err != nil {
+		panic(err)
+	}
+
 	u.Path = path.Join(u.Path, subpath)
 	r := strings.NewReader(data)
 	resp, err := http.Post(u.String(), "application/x-www-form-urlencoded", r)
@@ -153,8 +179,8 @@ func (r *RServe) perform(command string) error {
 	return err
 }
 
-func loadTest(sampler Sampler, freq int) {
-	tg := ThreadGroup{sampler: sampler, freq: freq}
+func loadTest(sampler Sampler, freq int, num_of_threads int) {
+	tg := ThreadGroup{sampler: sampler, freq: freq, num_of_threads: num_of_threads}
 	sl := &StandoutListener{}
 	tg.Start(sl)
 }
@@ -201,12 +227,13 @@ func NewConfig(filepath string) config {
 
 func main() {
 	freq := flag.Int("freq", 10, "frequency")
+	threads := flag.Int("threads", 10, "number of threads")
 	configpath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
 	conf := NewConfig(*configpath)
 
 	for _, sampler := range conf.samplers {
 		fmt.Println(sampler.name)
-		loadTest(sampler, *freq)
+		loadTest(sampler, *freq, *threads)
 	}
 }
